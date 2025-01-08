@@ -275,13 +275,26 @@ export class CodeHawksCrawlerService implements Crawler {
     }
     const owner: string = match[1];
     const repo: string = match[2];
-    const res: Response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/languages`,
-    );
-    if (!res.ok) {
+
+    try {
+      const res: Response = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/languages`,
+      );
+      if (!res.ok) {
+        console.error('Error fetching GitHub repo languages:', res.statusText);
+        return [];
+      }
+      const data: Record<string, number> = await res.json();
+      return Object.keys(data);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error('Error fetching GitHub repo languages:', err.message);
+      } else {
+        console.error(
+          'Unknown error occurred while fetching GitHub repo languages.',
+        );
+      }
       return [];
     }
-    const data: Record<string, number> = await res.json();
-    return Object.keys(data);
   }
 }
