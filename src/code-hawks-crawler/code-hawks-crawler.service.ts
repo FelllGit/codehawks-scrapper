@@ -76,6 +76,7 @@ export class CodeHawksCrawlerService implements Crawler {
     await page.goto(url, { waitUntil: 'networkidle' });
     const html: string = await page.content();
     const dom: JSDOM = new JSDOM(html);
+
     const h1: string =
       dom.window.document.querySelector('h1')?.textContent?.trim() ?? '';
     const sponsorName: string =
@@ -93,6 +94,44 @@ export class CodeHawksCrawlerService implements Crawler {
     const languages: string[] = repoLink
       ? await this.fetchGitHubRepoLanguages(repoLink)
       : [];
+
+    const totalPrizeSelector: string =
+      'div.flex.items-center.justify-between.gap-2';
+    const containers: NodeListOf<Element> =
+      dom.window.document.querySelectorAll(totalPrizeSelector);
+    const rewardContainer: Element | null =
+      Array.from(containers).find(
+        (el: Element): boolean =>
+          el.textContent?.includes('Total prize') === true,
+      ) ?? null;
+
+    let rewardsPool = 0;
+    let rewardsToken = '';
+
+    if (rewardContainer) {
+      const rewardAmountElement: HTMLSpanElement | null =
+        rewardContainer.querySelector(
+          'span.text-base.font-semibold.text-gray-900',
+        );
+      const rewardTokenElement: HTMLSpanElement | null =
+        rewardContainer.querySelector(
+          'span.text-base.font-semibold.text-gray-500',
+        );
+
+      if (rewardAmountElement && rewardTokenElement) {
+        rewardsPool = this.parseRewardAmount(
+          rewardAmountElement.textContent || '',
+        );
+        rewardsToken = this.parseRewardToken(
+          rewardTokenElement.textContent || '',
+        );
+      } else {
+        console.error('Reward or token element not found');
+      }
+    } else {
+      console.error('Reward container not found');
+    }
+
     let startDate: Date | null = null;
     let endDate: Date | null = null;
 
@@ -102,11 +141,9 @@ export class CodeHawksCrawlerService implements Crawler {
       );
 
       for (const de of dateElements) {
-        // Перевірка тексту без тултипу
         const dateText = await de.textContent();
 
         if (dateText && dateText.includes('→')) {
-          // Якщо текст є, парсимо дати без тултипу
           const [rawFrom, rawTo]: string[] = dateText
             .split('→')
             .map((t) => t.trim());
@@ -115,14 +152,10 @@ export class CodeHawksCrawlerService implements Crawler {
           break;
         }
 
-        // Якщо тексту немає, шукаємо тултип
         await de.hover();
         const tooltipLocator = page.locator('div[role="tooltip"]');
-
-        // Очікуємо, поки тултип стане видимим
         await tooltipLocator.waitFor({ state: 'visible', timeout: 3000 });
 
-        // Отримуємо текст тултипу
         const tooltipText: string = (await tooltipLocator.innerText()).trim();
 
         if (tooltipText.includes('→')) {
@@ -156,14 +189,14 @@ export class CodeHawksCrawlerService implements Crawler {
       imageUrl,
       originalUrl: url,
       languages,
-      maxReward: 0,
-      rewardsPool: 0,
-      rewardsToken: '',
+      maxReward: rewardsPool,
+      rewardsPool,
+      rewardsToken,
       startDate,
       endDate,
       evaluationEndDate: endDate,
       status: this.determineStatus(startDate, endDate),
-      tags: [],
+      tags: ['#contest'], // Можна додати більше тегів
     } as Web3SecurityContest;
   }
 
@@ -219,6 +252,18 @@ export class CodeHawksCrawlerService implements Crawler {
       return Web3SecurityContestStatus.UPCOMING;
     }
     return Web3SecurityContestStatus.ONGOING;
+  }
+
+  private parseRewardAmount(raw: string): number {
+    const match = raw.match(/[\d,]+/);
+    if (!match) {
+      return 0;
+    }
+    return parseFloat(match[0].replace(/,/g, '').replace(/\s/g, ''));
+  }
+
+  private parseRewardToken(raw: string): string {
+    return raw.trim(); // Прямий текст токену, наприклад "OP" або "USDC"
   }
 
   private async fetchGitHubRepoLanguages(repoUrl: string): Promise<string[]> {
