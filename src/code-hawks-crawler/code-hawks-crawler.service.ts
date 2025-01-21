@@ -16,13 +16,16 @@ export class CodeHawksCrawlerService implements Crawler {
     const pLimit = (await import('p-limit')).default;
     const browser: Browser = await chromium.launch({ headless: true });
     const page: Page = await browser.newPage();
+
     await page.goto('https://codehawks.cyfrin.io/contests?contestType=al', {
       waitUntil: 'domcontentloaded',
     });
+
     const dom: JSDOM = new JSDOM(await page.content());
     const items: NodeListOf<Element> =
       dom.window.document.querySelectorAll('li > div > div');
     const results: CrawledProgram[] = [];
+
     const limit = pLimit(10);
     const parsePromises: Array<Promise<CrawledProgram | null>> = [];
 
@@ -33,7 +36,9 @@ export class CodeHawksCrawlerService implements Crawler {
       if (!link) {
         continue;
       }
+
       const contestUrl: string = `https://codehawks.cyfrin.io${link.href}`;
+
       parsePromises.push(
         limit(async () => {
           try {
@@ -44,10 +49,7 @@ export class CodeHawksCrawlerService implements Crawler {
             return data;
           } catch (err: unknown) {
             if (err instanceof Error) {
-              console.error(
-                `Помилка парсингу контесту ${contestUrl}:`,
-                err.message,
-              );
+              console.error(`Error while parsing ${contestUrl}:`, err.message);
             }
             return null;
           }
@@ -73,7 +75,9 @@ export class CodeHawksCrawlerService implements Crawler {
   ): Promise<CrawledProgram | null> {
     const context: BrowserContext = await browser.newContext();
     const page: Page = await context.newPage();
+
     await page.goto(url, { waitUntil: 'networkidle' });
+
     const html: string = await page.content();
     const dom: JSDOM = new JSDOM(html);
 
@@ -81,41 +85,47 @@ export class CodeHawksCrawlerService implements Crawler {
       dom.window.document.querySelector('h1')?.textContent?.trim() ?? '';
     const sponsorName: string =
       dom.window.document
-        .querySelector('div.text-base.font-normal.text-gray-600')
+        .querySelector(
+          'div.text-base.font-normal.text-colors-text-text-tertiary-600',
+        )
         ?.textContent?.trim() ?? '';
+
     const imageUrl: string =
       dom.window.document
         .querySelector('img[data-melt-avatar-image]')
         ?.getAttribute('src') ?? '';
+
     const repoLink: string =
       dom.window.document
         .querySelector('a[href*="github.com"]')
         ?.getAttribute('href') ?? '';
+
     const languages: string[] = repoLink
       ? await this.fetchGitHubRepoLanguages(repoLink)
       : [];
 
     const totalPrizeSelector: string =
       'div.flex.items-center.justify-between.gap-2';
+
     const containers: NodeListOf<Element> =
       dom.window.document.querySelectorAll(totalPrizeSelector);
+
     const rewardContainer: Element | null =
-      Array.from(containers).find(
-        (el: Element): boolean =>
-          el.textContent?.includes('Total prize') === true,
+      Array.from(containers).find((el: Element) =>
+        el.textContent?.includes('Total prize'),
       ) ?? null;
 
-    let rewardsPool = 0;
-    let rewardsToken = '';
+    let rewardsPool: number = 0;
+    let rewardsToken: string = '';
 
     if (rewardContainer) {
       const rewardAmountElement: HTMLSpanElement | null =
         rewardContainer.querySelector(
-          'span.text-base.font-semibold.text-gray-900',
+          'span.text-base.font-semibold.text-colors-text-text-primary-900',
         );
       const rewardTokenElement: HTMLSpanElement | null =
         rewardContainer.querySelector(
-          'span.text-base.font-semibold.text-gray-500',
+          'span.text-base.font-semibold.text-colors-text-text-tertiary-600',
         );
 
       if (rewardAmountElement && rewardTokenElement) {
@@ -136,50 +146,53 @@ export class CodeHawksCrawlerService implements Crawler {
     let endDate: Date | null = null;
 
     try {
-      const dateElements = await page.$$(
-        'div.cursor-default.text-sm.font-normal.text-gray-600',
+      const dateButtonsLocator = page.locator(
+        'button[data-melt-tooltip-trigger], button[data-tooltip-trigger]',
       );
+      const dateButtons = await dateButtonsLocator.elementHandles();
 
-      for (const de of dateElements) {
-        const dateText = await de.textContent();
+      for (const button of dateButtons) {
+        const textContent = await button.innerText();
 
-        if (dateText && dateText.includes('→')) {
-          const [rawFrom, rawTo]: string[] = dateText
-            .split('→')
-            .map((t) => t.trim());
+        if (textContent.includes('→')) {
+          const [rawFrom, rawTo] = textContent.split('→').map((x) => x.trim());
           startDate = this.parseTooltipDate(rawFrom);
           endDate = this.parseTooltipDate(rawTo);
           break;
         }
 
-        await de.hover();
-        const tooltipLocator = page.locator('div[role="tooltip"]');
-        await tooltipLocator.waitFor({ state: 'visible', timeout: 3000 });
+        if (
+          textContent.includes('Starts in') ||
+          textContent.includes('Ends in')
+        ) {
+          await button.hover();
+          const tooltipLocator = page.locator('div[role="tooltip"]');
+          await tooltipLocator.waitFor({ state: 'visible', timeout: 3000 });
 
-        const tooltipText: string = (await tooltipLocator.innerText()).trim();
+          const tooltipText = await tooltipLocator.innerText();
 
-        if (tooltipText.includes('→')) {
-          const [rawFrom, rawTo]: string[] = tooltipText
-            .split('→')
-            .map((t) => t.trim());
-          startDate = this.parseTooltipDate(rawFrom);
-          endDate = this.parseTooltipDate(rawTo);
+          if (tooltipText.includes('→')) {
+            const [rawFrom, rawTo] = tooltipText
+              .split('→')
+              .map((t) => t.trim());
+            startDate = this.parseTooltipDate(rawFrom);
+            endDate = this.parseTooltipDate(rawTo);
+          }
+
           break;
         }
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
-        console.error(
-          `Не вдалося прочитати тултип із дат на ${url}`,
-          err.message,
-        );
+        console.error(`Failed to read tooltip dates from ${url}:`, err.message);
       }
     }
 
     await context.close();
 
     if (!startDate || !endDate) {
-      throw new Error('Не вдалося визначити дати');
+      console.error(`Failed to parse dates: ${url}. Skipping.`);
+      return null;
     }
 
     return {
@@ -196,29 +209,25 @@ export class CodeHawksCrawlerService implements Crawler {
       endDate,
       evaluationEndDate: endDate,
       status: this.determineStatus(startDate, endDate),
-      tags: ['#contest'], // Можна додати більше тегів
+      tags: ['#contest'],
     } as Web3SecurityContest;
   }
 
   private parseTooltipDate(raw: string): Date {
     let cleaned: string = raw.replace(/[()]/g, '');
+
     cleaned = cleaned.replace(/\b(\d+)(st|nd|rd|th)\b/, '$1');
     cleaned = cleaned.replace(/(\d+),\s+(\d+)/, '$1 $2');
     cleaned = cleaned.replace(/GMT\+(\d+)/, '+0$1:00');
 
-    // Основний формат
     const primaryFormat = 'ccc, LLL d yyyy HH:mm ZZ';
-    const secondaryFormats = [
-      'LLL d yyyy', // Наприклад, "Apr 22 2024"
-      'MMM d yyyy', // Наприклад, "Sep 30 2024"
-    ];
 
-    // Спробуємо спочатку основний формат
+    const secondaryFormats: string[] = ['LLL d yyyy', 'MMM d yyyy'];
+
     let dt: DateTime = DateTime.fromFormat(cleaned, primaryFormat, {
       zone: 'utc',
     });
 
-    // Якщо основний формат не спрацював, пробуємо додаткові
     if (!dt.isValid) {
       for (const format of secondaryFormats) {
         dt = DateTime.fromFormat(cleaned, format, { zone: 'utc' });
@@ -228,7 +237,6 @@ export class CodeHawksCrawlerService implements Crawler {
       }
     }
 
-    // Якщо дата все одно недійсна, кидаємо помилку
     if (!dt.isValid) {
       throw new Error(
         `Luxon parse failed for date string: "${raw}" => cleaned: "${cleaned}"`,
@@ -255,7 +263,7 @@ export class CodeHawksCrawlerService implements Crawler {
   }
 
   private parseRewardAmount(raw: string): number {
-    const match = raw.match(/[\d,]+/);
+    const match: RegExpMatchArray | null = raw.match(/[\d,]+/);
     if (!match) {
       return 0;
     }
@@ -263,7 +271,7 @@ export class CodeHawksCrawlerService implements Crawler {
   }
 
   private parseRewardToken(raw: string): string {
-    return raw.trim(); // Прямий текст токену, наприклад "OP" або "USDC"
+    return raw.trim();
   }
 
   private async fetchGitHubRepoLanguages(repoUrl: string): Promise<string[]> {
@@ -273,17 +281,29 @@ export class CodeHawksCrawlerService implements Crawler {
     if (!match) {
       return [];
     }
+
     const owner: string = match[1];
     const repo: string = match[2];
 
     try {
+      const headers: Record<string, string> = {
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'Crawler',
+      };
+      if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
+      }
+
       const res: Response = await fetch(
         `https://api.github.com/repos/${owner}/${repo}/languages`,
+        { headers },
       );
+
       if (!res.ok) {
         console.error('Error fetching GitHub repo languages:', res.statusText);
         return [];
       }
+
       const data: Record<string, number> = await res.json();
       return Object.keys(data);
     } catch (err: unknown) {
